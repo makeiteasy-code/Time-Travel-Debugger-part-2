@@ -51,7 +51,7 @@ struct Frame
     string func_name;
     int32_t argc;
     Variable argv[MAX_VARS_PER_FRAME];
-    int32_t returnLine;
+    int64_t returnLine;
     Variable locals[MAX_VARS_PER_FRAME];
     int32_t localCount;
 };
@@ -88,6 +88,15 @@ struct DebugSession
 
 bool recvAll(int sock, char *buf, size_t n)
 {
+    size_t receivedTotal=0;
+    while(n>receivedTotal){
+        int received = (int)recv(sock,receivedTotal+buff,n-receivedTotal,0);
+        if(0>=received)return 0;
+        receivedTotal+=received;
+    }
+    return 1;
+
+
     // recv() can return fewer bytes than asked for, so keep calling it until exactly n bytes are read.
     // Return false if the connection closes or fails before n bytes arrive.
 }
