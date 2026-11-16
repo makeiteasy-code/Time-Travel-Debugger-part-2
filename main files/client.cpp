@@ -116,6 +116,33 @@ bool sendAll(int sock, const char *buf, size_t n)
 
 int connectToHost(const char *host, int port)
 {
+    int sock = socket(AF_INET, SOCK_STREAM, 0);
+    if (sock == -1)
+    {
+        return -1;
+    }
+    sockaddr_in serverAddress = {};
+    serverAddress.sin_family = AF_INET;
+    serverAddress.sin_port = htons(port);
+
+    int result = inet_pton(AF_INET, host, &serverAddress.sin_addr);
+
+    if (result <= 0)
+    {
+        close(sock);
+        return -1;
+    }
+
+    result = connect(sock, (sockaddr *)&serverAddress, sizeof(serverAddress));
+
+    if (result == -1)
+    {
+        close(sock);
+        return -1;
+    }
+
+    return sock;
+
     // Create a TCP socket and connect it to host:port.
     // Return the socket, or -1 if the connection fails.
 }
