@@ -143,7 +143,7 @@ int connectToHost(const char *host, int port)
 bool uploadSource(int sock,const char *sourcePath)
 {
     FILE *file= fopen(sourcePath,"rb");
-    if (file==nullptr)return 0;   
+    if (file==nullptr)return 0;
     char buffer[IO_BUFFER_SIZE];
     size_t bytesRead= fread(buffer,1,IO_BUFFER_SIZE,file);
     uint32_t checksum =0;
@@ -177,6 +177,86 @@ bool uploadSource(int sock,const char *sourcePath)
 }
 bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
 {
+    FILE *file= fopen(outTdbgPath,"wb");
+    if (file==nullptr)return 0;
+    char status;
+    if (!recvAll(sock,&status,1)){
+        fclose(file);
+        remove(outTdbgPath);
+        outError = "failed to receive response status";
+        return 0;
+    }
+    if (status != 0 && status != 1)
+    {
+        fclose(file);
+        remove(outTdbgPath);
+        outError = "invalid response status";
+        return 0;
+    }
+    uint32_t checksum=0;
+    checksum +=static_cast<unsigned char>(status);
+    char buffer[IO_BUFFER_SIZE];
+    char lastBytes[4];
+    int countlastBytes=0;
+    while(1){
+        int bytesReceived = recv(sock,buffer,IO_BUFFER_SIZE,0);
+        if(bytesReceived < 0){
+            fclose(file);
+            remove(outTdbgPath);
+            outError = "failed to receive response data";
+            return false;
+        
+        }
+
+        if(bytesReceived == 0)break;
+        for (int i = 0;i < bytesReceived;i++)
+        {
+            char currentByte =buffer[i];
+            if(countlastBytes<4){
+                lastBytes[countlastBytes]=currentByte;
+                countlastBytes++;
+            }
+            else{
+                char payloadByte =lastBytes[0];
+                checksum += static_cast<unsigned char>(payloadByte);
+                if(status==0){
+                    if(fwrite(&payloadByte,1,1,file)!=1){
+                        fclose(file);
+                        remove(outTdbgPath);
+                        outError = "failed to write output file";
+                        return 0;
+                    }
+                }
+                else{
+                    outError += payloadByte;
+                }
+                lastBytes[0]=lastBytes[1];
+                lastBytes[1]=lastBytes[2];
+                lastBytes[2]=lastBytes[3];
+                lastBytes[3]=currentByte;
+            }
+        }
+    }
+    if(countlastBytes!=4){
+        fclose(file);
+        remove(outTdbgPath);
+        outError = "response is incomplete";
+        return 0;
+    }
+    uint32_t receivedChecksum;
+    memcpy(&receivedChecksum, lastBytes, sizeof(receivedChecksum));
+    if(receivedChecksum!=checksum){
+        fclose(file);
+        remove(outTdbgPath);
+        outError = "checksum mismatch, response corrupted";
+        return 0;
+    }
+    fclose(file);
+   if (status == 1){
+        remove(outTdbgPath);
+        return 0;
+    }
+    return 1;
     // Reply on the wire: [status][payload][CRC-32]. The CRC covers the status byte too.
     // Feed every received byte (status included) to a TrailerChecker.
     // Status 1: collect the payload into outError. Status 0: write the payload to the file.
