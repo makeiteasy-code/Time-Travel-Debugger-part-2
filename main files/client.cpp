@@ -86,7 +86,7 @@ struct DebugSession
 // PART A: TALKING TO THE LOAD BALANCER
 // =============================================================================================
 
-bool recvAll(int sock, char *buf, size_t n)
+bool recvAll(int sock, char *buff, size_t n)
 {
     size_t receivedTotal=0;
     while(n>receivedTotal){
@@ -100,11 +100,11 @@ bool recvAll(int sock, char *buf, size_t n)
     // recv() can return fewer bytes than asked for, so keep calling it until exactly n bytes are read.
     // Return false if the connection closes or fails before n bytes arrive.
 }
-bool sendAll(int sock, const char *buf, size_t n)
+bool sendAll(int sock, const char *buff, size_t n)
 {
     size_t sentTotal=0;
     while(n>sentTotal){
-        int sent = (int)recv(sock,sentTotal+buff,n-sentTotal,MSG_NOSIGNAL);
+        int sent = (int)send(sock,sentTotal+buff,n-sentTotal,MSG_NOSIGNAL);
         if(0>=sent)return 0;
         sentTotal+=sent;
     }
@@ -116,38 +116,61 @@ bool sendAll(int sock, const char *buf, size_t n)
 
 int connectToHost(const char *host, int port)
 {
-    int sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (sock == -1)
-    {
+    int sock=socket(AF_INET,SOCK_STREAM,0);
+    if (sock == -1){
         return -1;
     }
-    sockaddr_in serverAddress = {};
-    serverAddress.sin_family = AF_INET;
-    serverAddress.sin_port = htons(port);
+    sockaddr_in serverAddress={};
+    serverAddress.sin_family=AF_INET;
+    serverAddress.sin_port=htons(port);
 
-    int result = inet_pton(AF_INET, host, &serverAddress.sin_addr);
-
-    if (result <= 0)
-    {
+    int result =inet_pton(AF_INET,host,&serverAddress.sin_addr);
+    if (result <=0){
         close(sock);
         return -1;
     }
+    result = connect(sock,(sockaddr*)&serverAddress,sizeof(serverAddress));
 
-    result = connect(sock, (sockaddr *)&serverAddress, sizeof(serverAddress));
-
-    if (result == -1)
-    {
+    if (result == -1){
         close(sock);
         return -1;
     }
-
     return sock;
 
     // Create a TCP socket and connect it to host:port.
     // Return the socket, or -1 if the connection fails.
 }
-bool uploadSource(int sock, const char *sourcePath)
+bool uploadSource(int sock,const char *sourcePath)
 {
+    FILE *file= fopen(sourcePath,"rb");
+    if (file==nullptr)return 0;   
+    char buffer[IO_BUFFER_SIZE];
+    size_t bytesRead= fread(buffer,1,IO_BUFFER_SIZE,file);
+    uint32_t checksum =0;
+
+    while (bytesRead>0){
+        for (size_t i=0;i < bytesRead;i++){
+            checksum += static_cast<unsigned char>(buffer[i]);
+        }
+        if (!sendAll(sock, buffer, bytesRead)){
+            fclose(file);
+            return false;
+        }
+        bytesRead = fread(buffer,1,IO_BUFFER_SIZE,file);
+
+        
+
+    }
+    if (ferror(file)){
+        fclose(file);
+        return 0;
+    }
+    fclose(file);
+
+    if (!sendAll(sock,(const char*)&checksum,sizeof(checksum))) return 0;
+    if (shutdown(sock,SHUT_WR) ==-1)return 0;
+    
+    return 1;
     // have to do checksum and then send
     // When the file is finished, call shutdown(sock, SHUT_WR). This is how the server knows the string is complete.
     // Return false if the file cannot be opened or any send fails.
