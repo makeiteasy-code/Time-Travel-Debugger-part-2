@@ -539,7 +539,31 @@ void printHelp()
 bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
 {
     // 1. Split the line into words.
+    string word;
+    vector<string> words;
+    bool insideQuotes=0;
+    for(int i=0;i<line.length();i++){
+        char ch=line[i];
+        if(ch=='"')insideQuotes=1;
+        else if(ch==' '&&!insideQuotes){
+            if (!word.empty()){
+                words.push_back(word);
+                word.clear();
+            }
+        }
+        else word += ch;
+        
+    }
+
+    if(!word.empty()) words.push_back(word);
+    if (words.empty())return 0;
     // 2. If the first word is "ttdb", drop it.
+    if(words[0]==PROGRAM_NAME)words.erase(words.begin());
+    if(words.empty()){
+        cout <<"unknown command" <<endl;
+        printHelp();
+        return 0;
+    }
     // 3. Match the first word:
     //      start      -> needs a path after it, then cmdStart
     //      next       -> no more words, then cmdNext
@@ -548,19 +572,70 @@ bool runCommand(DebugSession &s, const string &line, bool &quitRequested)
     //                    then cmdJmpNext or cmdJmpPrv
     //      help       -> printHelp
     //      quit, exit -> set quitRequested = true
+    if(words[0]=="start"&&words.size()==2)return cmdStart(s, words[1]);
+    if(words[0]=="next"&&words.size()==1)return cmdNext(s);
+    if(words[0]=="prv"&&words.size()==1)return cmdPrv(s);
+    if(words[0]=="jmp"&&words.size()==3){
+        if(words[1]!= "next"&&words[1]!= "prv"){
+            cout <<"unknown command" <<endl;
+            printHelp();
+            return 0;
+        }
+        int n=atoi(words[2].c_str());
+        if(n<=0 || n >MAX_JUMP||to_string(n)!=words[2]){
+            cout <<"Invalid jump number."<<endl;
+            return 0;
+        }
+        if (words[1]=="next")return cmdJmpNext(s,n);
+        return cmdJmpPrv(s,n);
+    }
+    if(words[0]=="help" && words.size()==1){
+    printHelp();
+    return  1;
+    }
     // 4. For anything else, or a wrong number of words, print "unknown command" and the help text, and return false.
+    cout <<"unknown command"<<endl;
+    printHelp();
+    return 0;
 }
 int main(int argc, char *argv[])
 {
     // you get string LB_HOST and int LB_PORT = 0 in arguments of this main function. 
-
+    if(argc!= 1&& argc!=3){
+        cout<<"Usage: ./client [LB_HOST LB_PORT]"<<endl;
+        return 1;
+    }
+    if(argc==3){
+        LB_HOST=argv[1];
+        char *end;
+        long port=strtol(argv[2],&end,10);
+        if (*end!=0||port<=0||port>65535){
+            cout<<"Invalid load balancer port."<< endl;
+            return 1;
+        }
+        LB_PORT=port;
+    }
     // DebugSession session; initSession(session);
+    DebugSession session;
+    initSession(session);
+    string line;
     // Print a short welcome and the help text.
+    cout << "Welcome to Time-Travel Debugger!" << endl;
+    printHelp();
     //
     // Infinite loop:
     //   if quitRequested, break
-    //
+    while(1){
+        cout << PROMPT;
+        if(!getline(cin, line))break;
+        bool quit = 0;
+        runCommand(session, line, quit);
+        if(quit)break;
+    }
     // After the loop: closeSession(session) and return 0.
+    closeSession(session);
+    cout<<"Debugger closed."<<endl;
+    return 0;
     // Never exit the loop because of an error. Only quit or the end of the input leaves it.
 
 }
