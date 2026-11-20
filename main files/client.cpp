@@ -369,7 +369,7 @@ Snapshot *readSnapshotAt(TdbgReader &r, int32_t step){
 
             frame.locals[j].name.resize(nameSize);
 
-            if(fread(frame.locals[j].name.data(),1,nameSize,r.file)!=static_cast<size_t>(nameSize)){
+            if(fread(frame.locals[j].name.data(),1,nameSize,r.file)!=nameSize){
                 delete snapshot;
                 return nullptr;
             }
@@ -394,10 +394,17 @@ Snapshot *readSnapshotAt(TdbgReader &r, int32_t step){
 
 void initSession(DebugSession &s)
 {
-   
+    s.active_flag=0;
+    s.reader.file=nullptr;
+    s.currentStep=0;
 }
 void closeSession(DebugSession &s)
 {
+    if(s.active_flag){
+        closeTdbg(s.reader);
+        s.active_flag=0;
+    }
+    s.currentStep=0;
     // If active, call closeTdbg(s.reader). Then set active = false.
     // Called when the user types quit and when the input ends.
 }
@@ -410,11 +417,35 @@ void printSnapshot(int32_t step, int32_t totalSteps, const Snapshot &s); // defi
 
 bool showCurrent(DebugSession &s)
 {
+    Snapshot *snapshot=readSnapshotAt(s.reader, s.currentStep);
+    if(snapshot==nullptr){
+        cout <<"damaged .tdbg file"<< endl;
+        return 0;
+    }
+    printSnapshot((s.currentStep + 1),s.reader.header.stepCount,*snapshot);
+    delete snapshot;
+    return 1;
     // Read the snapshot at s.currentStep, call printSnapshot, delete the snapshot.
     // If readSnapshotAt returns nullptr, print "damaged .tdbg file" and return false.
 }
 bool moveBy(DebugSession &s, int32_t delta)
 {
+    if(!s.active_flag){
+        cout <<"Debugging session not active."<< endl;
+        return 0;
+    }
+    int64_t newStep=s.currentStep+delta;
+
+    if(newStep<0){
+        cout <<"Already at first step."<< endl;
+        return 0;
+    }
+    if(newStep>=s.reader.header.stepCount){
+        cout <<"Already at last step."<< endl;
+        return 0;
+    }
+    s.currentStep=newStep;
+    return showCurrent(s);
 }
 bool cmdStart(DebugSession &s, const string &sourcePath)
 {
@@ -425,11 +456,38 @@ bool cmdStart(DebugSession &s, const string &sourcePath)
     // 4. Only now close the old reader (if s.active), then put the new reader into s,
     //    set s.currentStep = 0 and s.active = true.
     // 5. Show step 1 with showCurrent(s).
+    if(!requestDebugFile(LB_HOST.c_str(),LB_PORT,sourcePath.c_str(),TDBG_FILE, error)){
+        cout << "Error: "<<error<<endl;
+        return 0;
+    }
+    TdbgReader reader{};
+    if(!openTdbg(TDBG_FILE,reader)){
+        cout <<"server sent a damaged .tdbg file"<< endl;
+        remove(TDBG_FILE);
+        return 0;
+    }
+    if(s.active_flag){
+        closeTdbg(s.reader);
+    }
+
+    
+    s.reader =reader;
+    s.currentStep=0;
+    s.active_flag=1;
+    return showCurrent(s);
 }
-bool cmdNext(DebugSession &s) {}
-bool cmdPrv(DebugSession &s) {}
-bool cmdJmpNext(DebugSession &s, int32_t n) {}
-bool cmdJmpPrv(DebugSession &s, int32_t n) { }
+bool cmdNext(DebugSession&s) {
+    return moveBy(s, 1);
+}
+bool cmdPrv(DebugSession&s) {
+    return moveBy(s,-1);
+}
+bool cmdJmpNext(DebugSession &s,int32_t n) {
+    return moveBy(s,n);
+}
+bool cmdJmpPrv(DebugSession &s,int32_t n) {
+    return moveBy(s,-n);
+}
 
 // =============================================================================================
 // PART E: PRINTING
@@ -437,11 +495,42 @@ bool cmdJmpPrv(DebugSession &s, int32_t n) { }
 
 void printSnapshot(int32_t step, int32_t totalSteps, const Snapshot &s)
 {
+    cout << endl<<"======== Step "<<step<<" of "<<totalSteps<<" ========"<< endl;
+    cout <<"Stack depth: "<<s.stackDepth<<endl;
+    for (int i=0;i<s.stackDepth;i++){
+        const Frame &frame=s.callStack[i];
+        cout <<"Frame "<< i+1 <<endl;
+        cout <<"Function: "<< frame.func_name <<endl;
+
+        cout <<"Arguments:"<<endl;
+
+        if(frame.argc==0)cout <<"  None"<< endl;
+
+        for(int j=0;j<frame.argc;j++){
+            cout <<"  "<<frame.argv[j].name<<" = "<<frame.argv[j].value <<endl;
+        }
+        cout<<"Return line: "<<frame.returnLine<<endl;
+        cout<<"Local variables:"<<endl;
+        if(frame.localCount==0)cout << "  None" << endl;
+        for(int j=0;j<frame.localCount;j++){
+            cout<<"  "<<frame.locals[j].name<<" = "<<frame.locals[j].value<<endl;
+        }
+    }
+    cout << "==================================" <<endl<<endl;
 }
 void printHelp()
 {
-    // Print the commands
+    cout <<endl<<"Available commands:"<<endl;
+    cout<<"  start <source.trace>  Start debugging session"<<endl;
+    cout<<"  next                  Move to next step"<<endl;
+    cout<<"  prv                   Move to previous step"<<endl;
+    cout<<"  jmp next <n>          Move forward by n steps"<<endl;
+    cout<<"  jmp prv <n>           Move backward by n steps"<<endl;
+    cout<<"  help                  Show this"<<endl;
+    cout<<"  quit                  Exit"<<endl;
+    cout<<endl;
 }
+
 
 // =============================================================================================
 // PART F: THE INFINITE LOOP
