@@ -23,6 +23,8 @@
 #include <vector>
 #include <sys/socket.h>
 #include "helper.h"
+#include <arpa/inet.h>
+#include <netinet/in.h>
 using namespace std;
 
 // ---- Constants ----
@@ -71,7 +73,7 @@ struct TTDBHeader
 // ---- Structs only the client needs ----
 struct TdbgReader
 {
-    ssize_t file_index;
+    FILE *file;
     TTDBHeader header;
     vector<int64_t> index;
 };
@@ -177,20 +179,18 @@ bool uploadSource(int sock,const char *sourcePath)
 }
 bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
 {
-    FILE *file= fopen(outTdbgPath,"wb");
-    if (file==nullptr)return 0;
     char status;
-    if (!recvAll(sock,&status,1)){
-        fclose(file);
-        remove(outTdbgPath);
+    if(!recvAll(sock,&status,1)){
         outError = "failed to receive response status";
         return 0;
     }
-    if (status != 0 && status != 1)
-    {
-        fclose(file);
-        remove(outTdbgPath);
+    if(status != 0 && status != 1){
         outError = "invalid response status";
+        return 0;
+    }
+    FILE *file= fopen(outTdbgPath,"wb");
+    if(file==nullptr){
+        outError="could not create output file";
         return 0;
     }
     uint32_t checksum=0;
@@ -271,15 +271,120 @@ bool receiveResponse(int sock, const char *outTdbgPath, string &outError)
 // The index lets us jump straight to any step without reading the steps before it.
 // =============================================================================================
 
-bool openTdbg(const char *path, TdbgReader &r)
-{
+bool openTdbg(const char *path, TdbgReader &r){
+    r.file=fopen(path,"rb");
+    if(r.file==nullptr)return 0;
+    if(fread(r.header.magic,1,4,r.file)!=4 || fread(&r.header.version,sizeof(int32_t),1,r.file)!= 1 || fread(&r.header.stepCount,sizeof(int32_t),1,r.file)!=1 || fread(&r.header.indexOffset,sizeof(int64_t),1,r.file)!=1){
+        fclose(r.file);
+        r.file = nullptr;
+        return 0;
+    }
+    if(memcmp(r.header.magic,"TTDB",4)!=0 || r.header.version!= 1 || r.header.stepCount<=0 || r.header.indexOffset<20){
+        fclose(r.file);
+        r.file = nullptr;
+        return 0;
+    }
+    if(fseek(r.file,r.header.indexOffset,SEEK_SET)!= 0){
+        fclose(r.file);
+        r.file = nullptr;
+        return 0;
+    }
+
+    r.index.resize(r.header.stepCount);
+    if(fread(r.index.data(),sizeof(int64_t),r.header.stepCount,r.file)!= r.header.stepCount)
+    {
+        fclose(r.file);
+        r.file = nullptr;
+        return 0;
+    }
+
+    return 1;
+
 }
-void closeTdbg(TdbgReader &r)
-{
+
+void closeTdbg(TdbgReader &r){
+    if(r.file != nullptr){
+        fclose(r.file);
+        r.file = nullptr;
+    }
+    r.index.clear();
     // Free r.index and close the file.
 }
-Snapshot *readSnapshotAt(TdbgReader &r, int32_t step)
-{
+Snapshot *readSnapshotAt(TdbgReader &r, int32_t step){
+    if(r.file==nullptr || step<0 || step>=r.header.stepCount)return nullptr;
+    if(fseek(r.file,r.index[step],SEEK_SET)!=0)return nullptr;
+    Snapshot *snapshot=new Snapshot{};
+
+    if(fread(&snapshot->stackDepth,sizeof(int32_t),1,r.file)!=1 || snapshot->stackDepth<0 || snapshot->stackDepth>MAX_STACK_DEPTH){
+        delete snapshot;
+        return nullptr;
+    }
+
+    for(int i=0;i<snapshot->stackDepth;i++){
+        Frame &frame=snapshot->callStack[i];
+        int32_t nameSize;
+        if (fread(&nameSize,sizeof(int32_t),1,r.file)!= 1||nameSize<0){
+            delete snapshot;
+            return nullptr;
+        }
+        frame.func_name.resize(nameSize);
+        if(fread(frame.func_name.data(),1,nameSize,r.file)!=nameSize){
+            delete snapshot;
+            return nullptr;
+        }
+        if(fread(&frame.argc,sizeof(int32_t),1,r.file)!= 1||frame.argc<0 || frame.argc>MAX_VARS_PER_FRAME){
+            delete snapshot;
+            return nullptr;
+        }
+
+        for (int j=0;j<frame.argc;j++){
+            if(fread(&nameSize,sizeof(int32_t),1,r.file)!= 1||nameSize<0){
+                delete snapshot;
+                return nullptr;
+            }
+            frame.argv[j].name.resize(nameSize);
+            if(fread(frame.argv[j].name.data(),1,nameSize,r.file)!=nameSize){
+                delete snapshot;
+                return nullptr;
+            }
+            if(fread(&frame.argv[j].value,sizeof(int32_t),1,r.file)!=1){
+                delete snapshot;
+                return nullptr;
+            }
+        }
+        if(fread(&frame.returnLine,sizeof(int64_t),1 r.file)!= 1){
+            delete snapshot;
+            return nullptr;
+        }
+        if(fread(&frame.localCount,sizeof(int32_t),1,r.file)!=1||frame.localCount<0||frame.localCount>MAX_VARS_PER_FRAME){
+            delete snapshot;
+            return nullptr;
+        }
+
+        for(int j=0;j<frame.localCount;j++){
+            if(fread(&nameSize,sizeof(int32_t),1,r.file)!= 1||nameSize<0){
+                delete snapshot;
+                return nullptr;
+            }
+
+            frame.locals[j].name.resize(nameSize);
+
+            if(fread(frame.locals[j].name.data(),1,nameSize,r.file)!=static_cast<size_t>(nameSize)){
+                delete snapshot;
+                return nullptr;
+            }
+
+            if(fread(&frame.locals[j].value,sizeof(int32_t),1,r.file)!=1){
+                delete snapshot;
+                return nullptr;
+            }
+        }
+    }
+    
+
+    return snapshot;
+
+
 }
 
 // =============================================================================================
