@@ -126,7 +126,7 @@ bool sendAll(int sock, const char *buf, size_t n)
 {
     int totalSent=0;
     while(totalSent<n){
-        int sent=send(sock,buf + totalSent,n - totalSent,0);
+        int sent=send(sock,buf+totalSent,n-totalSent,0);
         if(sent<=0)return 0;
         totalSent+=sent;
     }
@@ -137,6 +137,14 @@ bool sendAll(int sock, const char *buf, size_t n)
 }
 bool sendError(int sock, const string &message)
 {
+    char status=1;
+    int checksum=status;
+    for(int i=0;i<message.length();i++) checksum+= (char)message[i];
+    if(!sendAll(sock,(char *)&status,1))return 0;
+    if(!sendAll(sock,message.c_str(), message.length()))return 0;
+    if(!sendAll(sock, (char *)&checksum, 4))return 0;
+
+    return 1;
     // Reply format: [status: 1 byte][payload until close][checksum: 4 bytes].
     // For an error: send one byte with value 1, then the message text. 
 }
