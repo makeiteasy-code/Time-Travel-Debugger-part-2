@@ -22,7 +22,6 @@
 #include <signal.h>
 #include <vector>
 #include <sys/socket.h>
-#include "helper.h"
 #include <arpa/inet.h>
 #include <netinet/in.h>
 using namespace std;

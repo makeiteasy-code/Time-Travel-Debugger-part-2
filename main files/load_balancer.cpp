@@ -34,6 +34,8 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+
+
 using namespace std;
 
 
@@ -122,6 +124,13 @@ sig_atomic_t flag = 1;
 // ---- Basic socket helpers ----
 bool sendAll(int sock, const char *buf, size_t n) 
 {
+    int totalSent=0;
+    while(totalSent<n){
+        int sent=send(sock,buf + totalSent,n - totalSent,0);
+        if(sent<=0)return 0;
+        totalSent+=sent;
+    }
+    return 1;
     // Reply format: [status: 1 byte][sending_material][checksum: 4 bytes].
     // send() may send fewer bytes than asked for, so keep calling it until all n bytes are sent.
     
